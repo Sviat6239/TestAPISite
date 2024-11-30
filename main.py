@@ -1,39 +1,69 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
+import sqlite3
+import os
 
 app = FastAPI()
 
-# Модель користувача
 class User(BaseModel):
     id: int
     username: str
     email: str
 
-# Імітація бази даних
-users = [
-    User(id=1, username="user1", email="user1@example.com"),
-    User(id=2, username="user2", email="user2@example.com"),
-    User(id=3, username="user3", email="user3@example.com"),
-]
+DB_PATH = "users.db"
 
-# Ендпоінт для отримання списку всіх користувачів
+def get_db_connection():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    if not os.path.exists(DB_PATH):
+        conn = get_db_connection()
+        conn.execute(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY,
+                username TEXT NOT NULL,
+                email TEXT NOT NULL UNIQUE
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+
+init_db()
+
 @app.get("/users", response_model=List[User])
 def get_users():
+    conn = get_db_connection()
+    cursor = conn.execute("SELECT * FROM users")
+    users = [User(**dict(row)) for row in cursor.fetchall()]
+    conn.close()
     return users
 
-# Ендпоінт для отримання інформації про користувача за ID
 @app.get("/users/{user_id}", response_model=User)
 def get_user(user_id: int):
-    for user in users:
-        if user.id == user_id:
-            return user
-    raise HTTPException(status_code=404, detail="User not found")
+    conn = get_db_connection()
+    cursor = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    user = cursor.fetchone()
+    conn.close()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return User(**dict(user))
 
-# Ендпоінт для створення нового користувача
 @app.post("/create_user", response_model=User)
 def create_user(user: User):
-    if any(existing_user.email == user.email for existing_user in users):
-        raise HTTPException(status_code=400, detail="Email already exists")
-    users.append(user)
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            "INSERT INTO users (id, username, email) VALUES (?, ?, ?)",
+            (user.id, user.username, user.email),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError as e:
+        conn.close()
+        raise HTTPException(status_code=400, detail="User with this email already exists")
+    conn.close()
     return user
